@@ -65,6 +65,7 @@ enum {
 
 #define SLEN(s) (sizeof(s) - 1)
 #include "store/store.h"
+#include "semantic/semantic.h"
 
 #include <stdatomic.h>
 #include "foundation/compat_fs.h"
@@ -7595,14 +7596,20 @@ static bool vs_load_enriched_vector(cbm_store_t *s, const char *project, const c
     return found;
 }
 
-/* Sparse-random-index fallback for tokens not present in the enriched table. */
+/* Fallback for tokens not present in the enriched table.
+ *
+ * Index-time vectors come from cbm_sem_random_index(), which resolves a token
+ * against the vendored nomic-embed-code table and only degrades to sparse
+ * random indexing on a miss.  Query-time keywords must be built the same way,
+ * or a keyword outside the project's harvested token_vectors vocabulary is
+ * turned into a content-free hash and compared against semantically-built node
+ * vectors.  Because vs_min_cosine_score() takes the minimum across keywords,
+ * one such keyword collapses the whole query. */
 static void vs_fill_sparse_random(const char *token, float *out) {
-    uint64_t seed = XXH3_64bits(token, strlen(token));
-    for (int i = 0; i < VS_SPARSE_NNZE; i++) {
-        uint64_t h = XXH3_64bits_withSeed(&i, sizeof(i), seed + VS_RI_SEED);
-        int pos = (int)(h % VS_VEC_DIM);
-        float sign = (h & SKIP_ONE) ? CBM_STORE_UNIT_POS_F : -CBM_STORE_UNIT_POS_F;
-        out[pos] += sign;
+    cbm_sem_vec_t sv;
+    cbm_sem_random_index(token, &sv);
+    for (int d = 0; d < VS_VEC_DIM && d < CBM_SEM_DIM; d++) {
+        out[d] = sv.v[d];
     }
 }
 
